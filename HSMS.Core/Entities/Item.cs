@@ -13,6 +13,7 @@ public class Item
     /// </summary>
     public ItemCategory Category { get; set; }
     public string ItemName { get; set; } = string.Empty;
+    public string? SpecificationText { get; set; }
     public string UnitOfMeasure { get; set; } = string.Empty;
     public int MinimumThreshold { get; set; }
     public ICollection<InventoryRecord> InventoryRecords { get; set; } = new List<InventoryRecord>();

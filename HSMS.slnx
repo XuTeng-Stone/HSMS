@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="HSMS.Core/HSMS.Core.csproj" />
+  <Project Path="HSMS.Api/HSMS.Api.csproj" />
 </Solution>

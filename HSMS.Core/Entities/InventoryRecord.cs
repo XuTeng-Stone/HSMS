@@ -6,6 +6,7 @@ namespace HSMS.Core.Entities;
 public class InventoryRecord
 {
     public Guid RecordId { get; set; }
+    public Guid WarehouseId { get; set; }
     public Guid ItemId { get; set; }
     public string BatchLotNumber { get; set; } = string.Empty;
     /// <summary>
@@ -14,5 +15,6 @@ public class InventoryRecord
     public DateTime ExpiryDate { get; set; }
     public int QuantityOnHand { get; set; }
     public string LocationBin { get; set; } = string.Empty;
+    public Warehouse Warehouse { get; set; } = null!;
     public Item Item { get; set; } = null!;
 }

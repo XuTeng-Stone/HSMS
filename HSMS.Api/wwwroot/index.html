@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HSMS Supply Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <h1 class="brand-title">HSMS</h1>
+            <p class="brand-sub">Hospital Supply Management</p>
+          </div>
+        </div>
+        <nav class="nav" id="nav">
+          <button type="button" class="nav-btn active" data-view="catalog">Catalog</button>
+          <button type="button" class="nav-btn" data-view="stock">Stock &amp; locations</button>
+          <button type="button" class="nav-btn" data-view="levels">Warehouse levels</button>
+          <button type="button" class="nav-btn" data-view="transfers">Transfers</button>
+        </nav>
+        <a class="link-api" href="/swagger" target="_blank" rel="noopener">API docs</a>
+      </div>
+    </header>
+
+    <main class="main">
+      <div id="toast" class="toast" hidden></div>
+
+      <section id="view-catalog" class="view">
+        <div class="panel">
+          <h2 class="h2">Item catalog</h2>
+          <p class="muted">Search by name or specification to confirm dose, size, and model before selection.</p>
+          <div class="row gap">
+            <label class="field grow">
+              <span class="label">Search</span>
+              <input type="search" id="catalog-q" class="input" placeholder="Name or specification" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span class="label">Category</span>
+              <select id="catalog-cat" class="input select">
+                <option value="">All</option>
+                <option value="PPE">PPE</option>
+                <option value="Surgical">Surgical</option>
+                <option value="Pharmaceuticals">Pharmaceuticals</option>
+                <option value="HighValueImplants">High value implants</option>
+              </select>
+            </label>
+            <button type="button" class="btn primary" id="catalog-search">Search</button>
+          </div>
+        </div>
+        <div id="catalog-results" class="card-grid"></div>
+      </section>
+
+      <section id="view-stock" class="view hidden">
+        <div class="panel">
+          <h2 class="h2">Real-time stock &amp; storage</h2>
+          <p class="muted">On-hand quantity, bin, batch, expiry, and availability by warehouse.</p>
+          <div class="row gap wrap">
+            <label class="field grow">
+              <span class="label">Item</span>
+              <select id="stock-item" class="input select"></select>
+            </label>
+            <label class="field">
+              <span class="label">Warehouse filter</span>
+              <select id="stock-wh" class="input select">
+                <option value="">All warehouses</option>
+              </select>
+            </label>
+            <button type="button" class="btn primary" id="stock-load">Load</button>
+          </div>
+        </div>
+        <div id="stock-detail" class="stack"></div>
+      </section>
+
+      <section id="view-levels" class="view hidden">
+        <div class="panel">
+          <h2 class="h2">Warehouse fill vs safety ceiling</h2>
+          <p class="muted">Fill percent is on-hand divided by the safety stock ceiling for that location. Rows at or below reorder point need replenishment from central.</p>
+          <div class="row gap wrap">
+            <label class="field">
+              <span class="label">Warehouse</span>
+              <select id="levels-wh" class="input select">
+                <option value="">All</option>
+              </select>
+            </label>
+            <button type="button" class="btn primary" id="levels-load">Refresh</button>
+          </div>
+        </div>
+        <div id="levels-body" class="stack"></div>
+      </section>
+
+      <section id="view-transfers" class="view hidden">
+        <div class="panel">
+          <h2 class="h2">Central to satellite transfer</h2>
+          <p class="muted">Create a replenishment order from the remote central hub to the basement satellite store, then complete to move stock (FEFO from central).</p>
+          <div class="row gap wrap">
+            <label class="field grow">
+              <span class="label">Source (central)</span>
+              <select id="tr-src" class="input select"></select>
+            </label>
+            <label class="field grow">
+              <span class="label">Destination (satellite)</span>
+              <select id="tr-dst" class="input select"></select>
+            </label>
+          </div>
+          <div class="transfer-lines panel-inner" id="tr-lines"></div>
+          <div class="row gap wrap">
+            <label class="field grow">
+              <span class="label">Add line: item</span>
+              <select id="tr-item" class="input select"></select>
+            </label>
+            <label class="field narrow">
+              <span class="label">Quantity</span>
+              <input type="number" id="tr-qty" class="input" min="1" value="20" />
+            </label>
+            <button type="button" class="btn secondary" id="tr-add-line">Add line</button>
+            <button type="button" class="btn primary" id="tr-submit">Create transfer</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3 class="h3">Orders</h3>
+          <div id="tr-orders" class="stack"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

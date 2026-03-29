@@ -16,6 +16,10 @@ public class AppDbContext : DbContext
     public DbSet<Requisition> Requisitions => Set<Requisition>();
     public DbSet<Item> Items => Set<Item>();
     public DbSet<InventoryRecord> InventoryRecords => Set<InventoryRecord>();
+    public DbSet<Warehouse> Warehouses => Set<Warehouse>();
+    public DbSet<ItemWarehouseProfile> ItemWarehouseProfiles => Set<ItemWarehouseProfile>();
+    public DbSet<StockTransferOrder> StockTransferOrders => Set<StockTransferOrder>();
+    public DbSet<StockTransferLine> StockTransferLines => Set<StockTransferLine>();
     public DbSet<RequisitionLineItem> RequisitionLineItems => Set<RequisitionLineItem>();
     public DbSet<PickList> PickLists => Set<PickList>();
     public DbSet<DeliveryTask> DeliveryTasks => Set<DeliveryTask>();
@@ -56,7 +60,26 @@ public class AppDbContext : DbContext
             e.ToTable("Items");
             e.HasKey(i => i.ItemId);
             e.Property(i => i.ItemName).HasMaxLength(200).IsRequired();
+            e.Property(i => i.SpecificationText).HasMaxLength(500);
             e.Property(i => i.UnitOfMeasure).HasMaxLength(50).IsRequired();
+        });
+
+        modelBuilder.Entity<Warehouse>(e =>
+        {
+            e.ToTable("Warehouses");
+            e.HasKey(w => w.WarehouseId);
+            e.Property(w => w.Code).HasMaxLength(64).IsRequired();
+            e.Property(w => w.DisplayName).HasMaxLength(200).IsRequired();
+            e.HasIndex(w => w.Code).IsUnique();
+        });
+
+        modelBuilder.Entity<ItemWarehouseProfile>(e =>
+        {
+            e.ToTable("ItemWarehouseProfiles");
+            e.HasKey(p => p.ItemWarehouseProfileId);
+            e.HasOne(p => p.Item).WithMany().HasForeignKey(p => p.ItemId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(p => p.Warehouse).WithMany(w => w.ItemWarehouseProfiles).HasForeignKey(p => p.WarehouseId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(p => new { p.ItemId, p.WarehouseId }).IsUnique();
         });
 
         modelBuilder.Entity<InventoryRecord>(e =>
@@ -66,7 +89,29 @@ public class AppDbContext : DbContext
             e.Property(r => r.BatchLotNumber).HasMaxLength(100).IsRequired();
             e.Property(r => r.LocationBin).HasMaxLength(100).IsRequired();
             e.HasOne(r => r.Item).WithMany(i => i.InventoryRecords).HasForeignKey(r => r.ItemId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(r => r.Warehouse).WithMany(w => w.InventoryRecords).HasForeignKey(r => r.WarehouseId).OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(r => r.ItemId);
+            e.HasIndex(r => new { r.WarehouseId, r.ItemId });
+        });
+
+        modelBuilder.Entity<StockTransferOrder>(e =>
+        {
+            e.ToTable("StockTransferOrders");
+            e.HasKey(o => o.StockTransferOrderId);
+            e.HasOne(o => o.SourceWarehouse).WithMany(w => w.OutboundTransfers).HasForeignKey(o => o.SourceWarehouseId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(o => o.DestinationWarehouse).WithMany(w => w.InboundTransfers).HasForeignKey(o => o.DestinationWarehouseId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(o => o.RequestedBy).WithMany().HasForeignKey(o => o.RequestedByUserId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(o => o.CompletedBy).WithMany().HasForeignKey(o => o.CompletedByUserId).OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(o => o.Status);
+        });
+
+        modelBuilder.Entity<StockTransferLine>(e =>
+        {
+            e.ToTable("StockTransferLines");
+            e.HasKey(l => l.StockTransferLineId);
+            e.HasOne(l => l.StockTransferOrder).WithMany(o => o.Lines).HasForeignKey(l => l.StockTransferOrderId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(l => l.Item).WithMany().HasForeignKey(l => l.ItemId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(l => l.StockTransferOrderId);
         });
 
         modelBuilder.Entity<Requisition>(e =>
