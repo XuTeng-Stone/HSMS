@@ -493,3 +493,5 @@ internal sealed record ItemPlacementMapResponseDto(
     Guid ItemId,
     string ItemName,
     IReadOnlyList<WarehousePlacementMapDto> WarehouseMaps);
+
+public partial class Program;

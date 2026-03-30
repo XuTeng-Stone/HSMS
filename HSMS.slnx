@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="HSMS.Core/HSMS.Core.csproj" />
   <Project Path="HSMS.Api/HSMS.Api.csproj" />
+  <Project Path="HSMS.Api.Tests/HSMS.Api.Tests.csproj" />
 </Solution>
