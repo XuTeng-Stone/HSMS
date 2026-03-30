@@ -3,6 +3,7 @@ using System;
 using HSMS.Core.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HSMS.Core.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260330013533_AddInventoryRackAndMap")]
+    partial class AddInventoryRackAndMap
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.11");
@@ -84,17 +87,12 @@ namespace HSMS.Core.Migrations
                     b.Property<int>("ShelfLevel")
                         .HasColumnType("INTEGER");
 
-                    b.Property<Guid?>("StoragePositionId")
-                        .HasColumnType("TEXT");
-
                     b.Property<Guid>("WarehouseId")
                         .HasColumnType("TEXT");
 
                     b.HasKey("RecordId");
 
                     b.HasIndex("ItemId");
-
-                    b.HasIndex("StoragePositionId");
 
                     b.HasIndex("WarehouseId", "ItemId");
 
@@ -320,46 +318,6 @@ namespace HSMS.Core.Migrations
                     b.ToTable("StockTransferOrders", (string)null);
                 });
 
-            modelBuilder.Entity("HSMS.Core.Entities.StoragePosition", b =>
-                {
-                    b.Property<Guid>("StoragePositionId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AisleLabel")
-                        .HasMaxLength(50)
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("MapPercentX")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("MapPercentY")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("PositionCode")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("RackCode")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("ShelfLevel")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<Guid>("WarehouseId")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("StoragePositionId");
-
-                    b.HasIndex("WarehouseId", "PositionCode")
-                        .IsUnique();
-
-                    b.ToTable("StoragePositions", (string)null);
-                });
-
             modelBuilder.Entity("HSMS.Core.Entities.User", b =>
                 {
                     b.Property<Guid>("UserId")
@@ -431,42 +389,6 @@ namespace HSMS.Core.Migrations
                         .IsUnique();
 
                     b.ToTable("Warehouses", (string)null);
-                });
-
-            modelBuilder.Entity("HSMS.Core.Entities.WarehouseZone", b =>
-                {
-                    b.Property<Guid>("WarehouseZoneId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Label")
-                        .IsRequired()
-                        .HasMaxLength(8)
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("RectH")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("RectW")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("RectX")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("RectY")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("SortOrder")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<Guid>("WarehouseId")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("WarehouseZoneId");
-
-                    b.HasIndex("WarehouseId", "SortOrder");
-
-                    b.ToTable("WarehouseZones", (string)null);
                 });
 
             modelBuilder.Entity("HSMS.Core.Entities.EmergencyRequisition", b =>
@@ -554,11 +476,6 @@ namespace HSMS.Core.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("HSMS.Core.Entities.StoragePosition", "StoragePosition")
-                        .WithMany("InventoryRecords")
-                        .HasForeignKey("StoragePositionId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("HSMS.Core.Entities.Warehouse", "Warehouse")
                         .WithMany("InventoryRecords")
                         .HasForeignKey("WarehouseId")
@@ -566,8 +483,6 @@ namespace HSMS.Core.Migrations
                         .IsRequired();
 
                     b.Navigation("Item");
-
-                    b.Navigation("StoragePosition");
 
                     b.Navigation("Warehouse");
                 });
@@ -692,28 +607,6 @@ namespace HSMS.Core.Migrations
                     b.Navigation("SourceWarehouse");
                 });
 
-            modelBuilder.Entity("HSMS.Core.Entities.StoragePosition", b =>
-                {
-                    b.HasOne("HSMS.Core.Entities.Warehouse", "Warehouse")
-                        .WithMany("StoragePositions")
-                        .HasForeignKey("WarehouseId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Warehouse");
-                });
-
-            modelBuilder.Entity("HSMS.Core.Entities.WarehouseZone", b =>
-                {
-                    b.HasOne("HSMS.Core.Entities.Warehouse", "Warehouse")
-                        .WithMany("Zones")
-                        .HasForeignKey("WarehouseId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Warehouse");
-                });
-
             modelBuilder.Entity("HSMS.Core.Entities.Item", b =>
                 {
                     b.Navigation("InventoryRecords");
@@ -735,11 +628,6 @@ namespace HSMS.Core.Migrations
                     b.Navigation("Lines");
                 });
 
-            modelBuilder.Entity("HSMS.Core.Entities.StoragePosition", b =>
-                {
-                    b.Navigation("InventoryRecords");
-                });
-
             modelBuilder.Entity("HSMS.Core.Entities.User", b =>
                 {
                     b.Navigation("Requisitions");
@@ -754,10 +642,6 @@ namespace HSMS.Core.Migrations
                     b.Navigation("ItemWarehouseProfiles");
 
                     b.Navigation("OutboundTransfers");
-
-                    b.Navigation("StoragePositions");
-
-                    b.Navigation("Zones");
                 });
 
             modelBuilder.Entity("HSMS.Core.Entities.InventoryManager", b =>

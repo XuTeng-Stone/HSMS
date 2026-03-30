@@ -18,3 +18,5 @@ packages/
 *.DotSettings.user
 hsms_design.db
 **/hsms_demo.db
+*.db-shm
+*.db-wal

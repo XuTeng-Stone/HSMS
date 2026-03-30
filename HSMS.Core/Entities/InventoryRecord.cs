@@ -15,6 +15,12 @@ public class InventoryRecord
     public DateTime ExpiryDate { get; set; }
     public int QuantityOnHand { get; set; }
     public string LocationBin { get; set; } = string.Empty;
+    public string RackCode { get; set; } = string.Empty;
+    public int ShelfLevel { get; set; }
+    public int? MapPercentX { get; set; }
+    public int? MapPercentY { get; set; }
+    public Guid? StoragePositionId { get; set; }
+    public StoragePosition? StoragePosition { get; set; }
     public Warehouse Warehouse { get; set; } = null!;
     public Item Item { get; set; } = null!;
 }

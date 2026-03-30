@@ -1,10 +1,14 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 using HSMS.Api.Data;
 using HSMS.Core.Data;
 using HSMS.Core.Entities;
 using HSMS.Core.Enums;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+
+const int ReplenishThresholdPercent = 30;
 
 var builder = WebApplication.CreateBuilder(args);
 var dbDir = Path.Combine(builder.Environment.ContentRootPath, "data");
@@ -12,6 +16,10 @@ Directory.CreateDirectory(dbDir);
 var dbPath = Path.Combine(dbDir, "hsms_demo.db");
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite($"Data Source={dbPath}"));
+builder.Services.ConfigureHttpJsonOptions(o =>
+{
+    o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -24,6 +32,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
     await DbSeeder.SeedAsync(db);
+    await VirtualWarehouseLayoutBootstrap.EnsureAsync(db);
 }
 
 app.UseDefaultFiles();
@@ -67,21 +76,27 @@ app.MapGet("/api/inventory/items/{itemId:guid}", async (
         .Where(r => r.ItemId == itemId);
     if (warehouseId.HasValue)
         recordsQuery = recordsQuery.Where(r => r.WarehouseId == warehouseId.Value);
-    var rows = await recordsQuery
-        .Join(db.Warehouses.AsNoTracking(), r => r.WarehouseId, w => w.WarehouseId, (r, w) => new { r, w })
-        .OrderBy(x => x.w.Code)
-        .ThenBy(x => x.r.ExpiryDate)
-        .Select(x => new InventoryRowDto(
-            x.r.RecordId,
-            x.r.WarehouseId,
-            x.w.Code,
-            x.w.DisplayName,
-            x.r.QuantityOnHand,
-            x.r.LocationBin,
-            x.r.BatchLotNumber,
-            x.r.ExpiryDate,
-            x.r.QuantityOnHand > 0 && x.r.ExpiryDate >= today))
-        .ToListAsync();
+    var rows = await (
+        from r in recordsQuery
+        join w in db.Warehouses.AsNoTracking() on r.WarehouseId equals w.WarehouseId
+        join sp in db.StoragePositions.AsNoTracking() on r.StoragePositionId equals sp.StoragePositionId into spg
+        from sp in spg.DefaultIfEmpty()
+        orderby w.Code, r.ExpiryDate
+        select new InventoryRowDto(
+            r.RecordId,
+            r.WarehouseId,
+            w.Code,
+            w.DisplayName,
+            r.QuantityOnHand,
+            r.LocationBin,
+            sp != null ? sp.RackCode : r.RackCode,
+            sp != null ? sp.ShelfLevel : r.ShelfLevel,
+            sp != null ? (int?)sp.MapPercentX : r.MapPercentX,
+            sp != null ? (int?)sp.MapPercentY : r.MapPercentY,
+            r.BatchLotNumber,
+            r.ExpiryDate,
+            r.QuantityOnHand > 0 && r.ExpiryDate >= today)
+    ).ToListAsync();
     var groups = rows
         .GroupBy(x => new { x.WarehouseId, x.WarehouseCode, x.WarehouseName })
         .Select(g => new InventoryByWarehouseDto(
@@ -96,6 +111,10 @@ app.MapGet("/api/inventory/items/{itemId:guid}", async (
                 x.WarehouseName,
                 x.QuantityOnHand,
                 x.LocationBin,
+                x.RackCode,
+                x.ShelfLevel,
+                x.MapPercentX,
+                x.MapPercentY,
                 x.BatchLotNumber,
                 x.ExpiryDate,
                 x.IsAvailable)).ToList()))
@@ -129,7 +148,8 @@ app.MapGet("/api/inventory/levels", async ([FromQuery] Guid? warehouseId, AppDbC
             ceiling,
             fillPercent,
             p.ReorderPoint,
-            onHand <= p.ReorderPoint));
+            ReplenishThresholdPercent,
+            fillPercent < ReplenishThresholdPercent));
     }
     return Results.Ok(result.OrderBy(x => x.ItemName).ThenBy(x => x.WarehouseCode));
 });
@@ -189,6 +209,10 @@ app.MapPost("/api/stock-transfers/{id:guid}/complete", async (Guid id, AppDbCont
         return Results.BadRequest("Order already completed.");
     if (order.Status == StockTransferOrderStatus.Cancelled)
         return Results.BadRequest("Order is cancelled.");
+    var recvSlot = await db.StoragePositions.AsNoTracking()
+        .Where(p => p.WarehouseId == order.DestinationWarehouseId && p.PositionCode == "RECEIVING")
+        .Select(p => new { p.StoragePositionId, p.RackCode, p.MapPercentX, p.MapPercentY })
+        .FirstOrDefaultAsync();
     foreach (var line in order.Lines)
     {
         var remaining = line.Quantity;
@@ -224,7 +248,12 @@ app.MapPost("/api/stock-transfers/{id:guid}/complete", async (Guid id, AppDbCont
                     BatchLotNumber = row.BatchLotNumber,
                     ExpiryDate = row.ExpiryDate,
                     QuantityOnHand = take,
-                    LocationBin = "RECEIVING"
+                    LocationBin = "RECEIVING",
+                    StoragePositionId = recvSlot?.StoragePositionId,
+                    RackCode = recvSlot?.RackCode ?? "RCV",
+                    ShelfLevel = 0,
+                    MapPercentX = recvSlot?.MapPercentX ?? 88,
+                    MapPercentY = recvSlot?.MapPercentY ?? 90
                 });
             }
             else
@@ -294,6 +323,67 @@ app.MapGet("/api/warehouses", async (AppDbContext db) =>
     return Results.Ok(w);
 });
 
+app.MapGet("/api/warehouses/{warehouseId:guid}/virtual-layout", async (Guid warehouseId, AppDbContext db) =>
+{
+    var wh = await db.Warehouses.AsNoTracking().FirstOrDefaultAsync(w => w.WarehouseId == warehouseId);
+    if (wh is null)
+        return Results.NotFound();
+    var zones = await db.WarehouseZones.AsNoTracking()
+        .Where(z => z.WarehouseId == warehouseId)
+        .OrderBy(z => z.SortOrder)
+        .Select(z => new LayoutZoneDto(z.Label, z.SortOrder, z.RectX, z.RectY, z.RectW, z.RectH))
+        .ToListAsync();
+    var positions = await db.StoragePositions.AsNoTracking()
+        .Where(p => p.WarehouseId == warehouseId)
+        .OrderBy(p => p.PositionCode)
+        .Select(p => new LayoutPositionDto(p.StoragePositionId, p.PositionCode, p.RackCode, p.ShelfLevel, p.MapPercentX, p.MapPercentY, p.AisleLabel))
+        .ToListAsync();
+    return Results.Ok(new VirtualWarehouseLayoutDto(wh.WarehouseId, wh.Code, wh.DisplayName, zones, positions));
+});
+
+app.MapGet("/api/inventory/items/{itemId:guid}/placement-map", async (Guid itemId, [FromQuery] Guid? warehouseId, AppDbContext db) =>
+{
+    var item = await db.Items.AsNoTracking().FirstOrDefaultAsync(i => i.ItemId == itemId);
+    if (item is null)
+        return Results.NotFound();
+    var whIds = await db.InventoryRecords.AsNoTracking()
+        .Where(r => r.ItemId == itemId && r.QuantityOnHand > 0 && (!warehouseId.HasValue || r.WarehouseId == warehouseId.Value))
+        .Select(r => r.WarehouseId)
+        .Distinct()
+        .OrderBy(x => x)
+        .ToListAsync();
+    var maps = new List<WarehousePlacementMapDto>();
+    foreach (var wid in whIds)
+    {
+        var wh = await db.Warehouses.AsNoTracking().FirstAsync(w => w.WarehouseId == wid);
+        var zones = await db.WarehouseZones.AsNoTracking()
+            .Where(z => z.WarehouseId == wid)
+            .OrderBy(z => z.SortOrder)
+            .Select(z => new LayoutZoneDto(z.Label, z.SortOrder, z.RectX, z.RectY, z.RectW, z.RectH))
+            .ToListAsync();
+        var markers = await (
+            from r in db.InventoryRecords.AsNoTracking()
+            where r.ItemId == itemId && r.QuantityOnHand > 0 && r.WarehouseId == wid
+            join sp in db.StoragePositions.AsNoTracking() on r.StoragePositionId equals sp.StoragePositionId into spj
+            from sp in spj.DefaultIfEmpty()
+            select new PlacementMarkerDto(
+                r.RecordId,
+                sp != null ? sp.StoragePositionId : null,
+                sp != null ? sp.PositionCode : r.LocationBin,
+                sp != null ? sp.RackCode : r.RackCode,
+                sp != null ? sp.ShelfLevel : r.ShelfLevel,
+                sp != null ? sp.MapPercentX : (r.MapPercentX ?? 50),
+                sp != null ? sp.MapPercentY : (r.MapPercentY ?? 50),
+                r.LocationBin,
+                r.QuantityOnHand,
+                r.BatchLotNumber,
+                r.ExpiryDate)
+        ).ToListAsync();
+        maps.Add(new WarehousePlacementMapDto(wid, wh.Code, wh.DisplayName, zones, markers));
+    }
+    return Results.Ok(new ItemPlacementMapResponseDto(item.ItemId, item.ItemName, maps));
+});
+
 app.Run();
 
 internal sealed record ItemCatalogDto(Guid ItemId, string ItemName, string Category, string UnitOfMeasure, string? SpecificationText, int MinimumThreshold);
@@ -305,6 +395,10 @@ internal sealed record InventoryRowDto(
     string WarehouseName,
     int QuantityOnHand,
     string LocationBin,
+    string RackCode,
+    int ShelfLevel,
+    int? MapPercentX,
+    int? MapPercentY,
     string BatchLotNumber,
     DateTime ExpiryDate,
     bool IsAvailable);
@@ -327,6 +421,7 @@ internal sealed record InventoryLevelDto(
     int SafetyStockCeiling,
     int FillPercent,
     int ReorderPoint,
+    int ReplenishThresholdPercent,
     bool NeedsReplenishment);
 
 internal sealed record CreateStockTransferRequest(
@@ -362,3 +457,39 @@ internal sealed record StockTransferDetailDto(
     IReadOnlyList<StockTransferLineDto> Lines);
 
 internal sealed record WarehouseDto(Guid WarehouseId, string Code, string DisplayName, bool IsCentralHub);
+
+internal sealed record LayoutZoneDto(string Label, int SortOrder, int RectX, int RectY, int RectW, int RectH);
+
+internal sealed record LayoutPositionDto(Guid StoragePositionId, string PositionCode, string RackCode, int ShelfLevel, int MapPercentX, int MapPercentY, string? AisleLabel);
+
+internal sealed record VirtualWarehouseLayoutDto(
+    Guid WarehouseId,
+    string Code,
+    string DisplayName,
+    IReadOnlyList<LayoutZoneDto> Zones,
+    IReadOnlyList<LayoutPositionDto> Positions);
+
+internal sealed record PlacementMarkerDto(
+    Guid RecordId,
+    Guid? StoragePositionId,
+    string PositionCode,
+    string RackCode,
+    int ShelfLevel,
+    int MapPercentX,
+    int MapPercentY,
+    string LocationBin,
+    int QuantityOnHand,
+    string BatchLotNumber,
+    DateTime ExpiryDate);
+
+internal sealed record WarehousePlacementMapDto(
+    Guid WarehouseId,
+    string WarehouseCode,
+    string WarehouseName,
+    IReadOnlyList<LayoutZoneDto> Zones,
+    IReadOnlyList<PlacementMarkerDto> Markers);
+
+internal sealed record ItemPlacementMapResponseDto(
+    Guid ItemId,
+    string ItemName,
+    IReadOnlyList<WarehousePlacementMapDto> WarehouseMaps);

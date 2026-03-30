@@ -17,6 +17,8 @@ public class AppDbContext : DbContext
     public DbSet<Item> Items => Set<Item>();
     public DbSet<InventoryRecord> InventoryRecords => Set<InventoryRecord>();
     public DbSet<Warehouse> Warehouses => Set<Warehouse>();
+    public DbSet<WarehouseZone> WarehouseZones => Set<WarehouseZone>();
+    public DbSet<StoragePosition> StoragePositions => Set<StoragePosition>();
     public DbSet<ItemWarehouseProfile> ItemWarehouseProfiles => Set<ItemWarehouseProfile>();
     public DbSet<StockTransferOrder> StockTransferOrders => Set<StockTransferOrder>();
     public DbSet<StockTransferLine> StockTransferLines => Set<StockTransferLine>();
@@ -82,16 +84,39 @@ public class AppDbContext : DbContext
             e.HasIndex(p => new { p.ItemId, p.WarehouseId }).IsUnique();
         });
 
+        modelBuilder.Entity<WarehouseZone>(e =>
+        {
+            e.ToTable("WarehouseZones");
+            e.HasKey(z => z.WarehouseZoneId);
+            e.Property(z => z.Label).HasMaxLength(8).IsRequired();
+            e.HasOne(z => z.Warehouse).WithMany(w => w.Zones).HasForeignKey(z => z.WarehouseId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(z => new { z.WarehouseId, z.SortOrder });
+        });
+
+        modelBuilder.Entity<StoragePosition>(e =>
+        {
+            e.ToTable("StoragePositions");
+            e.HasKey(p => p.StoragePositionId);
+            e.Property(p => p.PositionCode).HasMaxLength(100).IsRequired();
+            e.Property(p => p.RackCode).HasMaxLength(32).IsRequired();
+            e.Property(p => p.AisleLabel).HasMaxLength(50);
+            e.HasOne(p => p.Warehouse).WithMany(w => w.StoragePositions).HasForeignKey(p => p.WarehouseId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(p => new { p.WarehouseId, p.PositionCode }).IsUnique();
+        });
+
         modelBuilder.Entity<InventoryRecord>(e =>
         {
             e.ToTable("InventoryRecords");
             e.HasKey(r => r.RecordId);
             e.Property(r => r.BatchLotNumber).HasMaxLength(100).IsRequired();
             e.Property(r => r.LocationBin).HasMaxLength(100).IsRequired();
+            e.Property(r => r.RackCode).HasMaxLength(32).IsRequired();
             e.HasOne(r => r.Item).WithMany(i => i.InventoryRecords).HasForeignKey(r => r.ItemId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(r => r.Warehouse).WithMany(w => w.InventoryRecords).HasForeignKey(r => r.WarehouseId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(r => r.StoragePosition).WithMany(sp => sp.InventoryRecords).HasForeignKey(r => r.StoragePositionId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(r => r.ItemId);
             e.HasIndex(r => new { r.WarehouseId, r.ItemId });
+            e.HasIndex(r => r.StoragePositionId);
         });
 
         modelBuilder.Entity<StockTransferOrder>(e =>

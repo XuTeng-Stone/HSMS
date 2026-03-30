@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=5" />
 </head>
 <body>
   <div class="app">
@@ -61,7 +61,7 @@
       <section id="view-stock" class="view hidden">
         <div class="panel">
           <h2 class="h2">Real-time stock &amp; storage</h2>
-          <p class="muted">On-hand quantity, bin, batch, expiry, and availability by warehouse.</p>
+          <p class="muted">Load bin-level stock. Use <strong>Placement map</strong> to open the virtual warehouse diagram (zones, racks, red markers) for the selected item.</p>
           <div class="row gap wrap">
             <label class="field grow">
               <span class="label">Item</span>
@@ -74,6 +74,7 @@
               </select>
             </label>
             <button type="button" class="btn primary" id="stock-load">Load</button>
+            <button type="button" class="btn secondary" id="stock-map-btn" disabled>Placement map</button>
           </div>
         </div>
         <div id="stock-detail" class="stack"></div>
@@ -82,7 +83,7 @@
       <section id="view-levels" class="view hidden">
         <div class="panel">
           <h2 class="h2">Warehouse fill vs safety ceiling</h2>
-          <p class="muted">Fill percent is on-hand divided by the safety stock ceiling for that location. Rows at or below reorder point need replenishment from central.</p>
+          <p class="muted">Fill percent is on-hand divided by the safety stock ceiling. Replenish alert when fill drops below 30%. Reference reorder point is still shown for planning.</p>
           <div class="row gap wrap">
             <label class="field">
               <span class="label">Warehouse</span>
@@ -131,6 +132,18 @@
       </section>
     </main>
   </div>
-  <script src="app.js"></script>
+
+  <div id="map-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-map></div>
+    <div class="modal-card" role="dialog" aria-labelledby="map-modal-title">
+      <div class="modal-card-head">
+        <h2 id="map-modal-title" class="modal-card-title">Placement map</h2>
+        <button type="button" class="btn ghost small" id="map-modal-close" aria-label="Close">Close</button>
+      </div>
+      <div id="map-modal-body" class="modal-card-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js?v=6"></script>
 </body>
 </html>

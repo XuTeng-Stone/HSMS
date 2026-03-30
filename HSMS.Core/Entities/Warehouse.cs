@@ -7,6 +7,8 @@ public class Warehouse
     public string DisplayName { get; set; } = string.Empty;
     public bool IsCentralHub { get; set; }
     public ICollection<ItemWarehouseProfile> ItemWarehouseProfiles { get; set; } = new List<ItemWarehouseProfile>();
+    public ICollection<WarehouseZone> Zones { get; set; } = new List<WarehouseZone>();
+    public ICollection<StoragePosition> StoragePositions { get; set; } = new List<StoragePosition>();
     public ICollection<InventoryRecord> InventoryRecords { get; set; } = new List<InventoryRecord>();
     public ICollection<StockTransferOrder> OutboundTransfers { get; set; } = new List<StockTransferOrder>();
     public ICollection<StockTransferOrder> InboundTransfers { get; set; } = new List<StockTransferOrder>();
