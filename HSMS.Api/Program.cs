@@ -44,9 +44,11 @@ app.MapGet("/api/items", async ([FromQuery] string? q, [FromQuery] string? categ
     if (!string.IsNullOrWhiteSpace(q))
     {
         var term = q.Trim();
+        var t = term.ToLower();
+        var like = $"%{t}%";
         query = query.Where(i =>
-            i.ItemName.Contains(term) ||
-            (i.SpecificationText != null && i.SpecificationText.Contains(term)));
+            EF.Functions.Like(i.ItemName.ToLower(), like) ||
+            (i.SpecificationText != null && EF.Functions.Like(i.SpecificationText.ToLower(), like)));
     }
     if (!string.IsNullOrWhiteSpace(category) && Enum.TryParse<ItemCategory>(category, true, out var cat))
         query = query.Where(i => i.Category == cat);
