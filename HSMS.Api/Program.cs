@@ -37,6 +37,7 @@ using (var scope = app.Services.CreateScope())
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.MapGet("/favicon.ico", () => Results.NoContent());
 
 app.MapGet("/api/items", async ([FromQuery] string? q, [FromQuery] string? category, AppDbContext db) =>
 {
@@ -205,14 +206,17 @@ app.MapPost("/api/stock-transfers", async ([FromBody] CreateStockTransferRequest
     return Results.Created($"/api/stock-transfers/{order.StockTransferOrderId}", new { order.StockTransferOrderId, body.Priority, body.Justification });
 });
 
-app.MapPost("/api/stock-transfers/{id:guid}/complete", async (Guid id, [FromBody] CompleteStockTransferRequest body, AppDbContext db) =>
+app.MapPost("/api/stock-transfers/{id:guid}/complete", async (Guid id, [FromBody] CompleteStockTransferRequest? body, AppDbContext db) =>
 {
     await using var tx = await db.Database.BeginTransactionAsync();
-    var operatorUser = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == body.CompletedByUserId);
-    if (operatorUser is null || !operatorUser.IsActive)
-        return Results.BadRequest("CompletedByUserId is invalid or inactive.");
-    if (operatorUser.SystemRole is not (SystemRole.InventoryManager or SystemRole.Admin))
-        return Results.BadRequest("Only inventory manager or admin can complete transfer orders.");
+    if (body?.CompletedByUserId is Guid completedByUserId)
+    {
+        var operatorUser = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == completedByUserId);
+        if (operatorUser is null || !operatorUser.IsActive)
+            return Results.BadRequest("CompletedByUserId is invalid or inactive.");
+        if (operatorUser.SystemRole is not (SystemRole.InventoryManager or SystemRole.Admin))
+            return Results.BadRequest("Only inventory manager or admin can complete transfer orders.");
+    }
     var order = await db.StockTransferOrders
         .Include(o => o.Lines)
         .FirstOrDefaultAsync(o => o.StockTransferOrderId == id);
@@ -277,7 +281,7 @@ app.MapPost("/api/stock-transfers/{id:guid}/complete", async (Guid id, [FromBody
     }
     order.Status = StockTransferOrderStatus.Completed;
     order.CompletedAt = DateTime.UtcNow;
-    order.CompletedByUserId = body.CompletedByUserId;
+    order.CompletedByUserId = body?.CompletedByUserId;
     await db.SaveChangesAsync();
     await tx.CommitAsync();
     return Results.Ok(new { order.StockTransferOrderId, order.Status });
