@@ -11,6 +11,10 @@ public sealed class ApiIntegrationTests(ApiWebApplicationFactory factory) : ICla
     private static readonly Guid CentralId = Guid.Parse("11111111-1111-1111-1111-111111111101");
     private static readonly Guid SatelliteId = Guid.Parse("11111111-1111-1111-1111-111111111102");
     private static readonly Guid ItemAmoxicillin = Guid.Parse("22222222-2222-2222-2222-222222222201");
+    private static readonly Guid ItemTitaniumPlate = Guid.Parse("22222222-2222-2222-2222-222222222206");
+    private static readonly Guid MedicalUser = Guid.Parse("33333333-3333-3333-3333-333333333301");
+    private static readonly Guid InventoryManagerUser = Guid.Parse("33333333-3333-3333-3333-333333333303");
+    private static readonly Guid LogisticsUser = Guid.Parse("33333333-3333-3333-3333-333333333304");
 
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -105,16 +109,19 @@ public sealed class ApiIntegrationTests(ApiWebApplicationFactory factory) : ICla
     }
 
     [Fact]
-    public async Task PostStockTransfer_WhenSatelliteToCentral_ReturnsBadRequest()
+    public async Task PostStockTransfer_WhenSatelliteToCentral_IsAllowedForInterDepartmentTransfer()
     {
         var body = new
         {
             sourceWarehouseId = SatelliteId,
             destinationWarehouseId = CentralId,
-            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 1 } }
+            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 1 } },
+            requestedByUserId = InventoryManagerUser,
+            priority = "urgent",
+            justification = "ER temporary reallocation"
         };
         var res = await _client.PostAsJsonAsync("/api/stock-transfers", body, JsonOpts);
-        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
     }
 
     [Fact]
@@ -125,16 +132,217 @@ public sealed class ApiIntegrationTests(ApiWebApplicationFactory factory) : ICla
         {
             sourceWarehouseId = CentralId,
             destinationWarehouseId = SatelliteId,
-            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 3 } }
+            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 3 } },
+            requestedByUserId = InventoryManagerUser
         };
         var post = await _client.PostAsJsonAsync("/api/stock-transfers", create, JsonOpts);
         Assert.Equal(HttpStatusCode.Created, post.StatusCode);
         var created = await post.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
         var orderId = created.GetProperty("stockTransferOrderId").GetGuid();
-        var complete = await _client.PostAsync($"/api/stock-transfers/{orderId}/complete", null);
+        var complete = await _client.PostAsJsonAsync($"/api/stock-transfers/{orderId}/complete", new { completedByUserId = InventoryManagerUser }, JsonOpts);
         Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
         var satAfter = await GetSatelliteOnHand(ItemAmoxicillin);
         Assert.Equal(satBefore + 3, satAfter);
+    }
+
+    [Fact]
+    public async Task ApproveHighValueEmergencyRequisition_RequiresApprovalNote()
+    {
+        var create = await _client.PostAsJsonAsync("/api/requisitions/emergency", new
+        {
+            requestedById = MedicalUser,
+            deliveryLocation = "OR-02",
+            justificationCode = "CRITICAL_IMPLANT",
+            lines = new[] { new { itemId = ItemTitaniumPlate, quantity = 1 } }
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var createBody = await create.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        var reqId = createBody.GetProperty("requisitionId").GetGuid();
+
+        var noNote = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/approve", new
+        {
+            approvedByUserId = InventoryManagerUser
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.BadRequest, noNote.StatusCode);
+
+        var withNote = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/approve", new
+        {
+            approvedByUserId = InventoryManagerUser,
+            approvalNote = "Implant verified against surgery plan."
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, withNote.StatusCode);
+    }
+
+    [Fact]
+    public async Task StandardRequisition_FullFlow_ReachesCompleted()
+    {
+        var create = await _client.PostAsJsonAsync("/api/requisitions/standard", new
+        {
+            requestedById = MedicalUser,
+            deliveryLocation = "ER-Bed-05",
+            targetDeliveryWindow = "within-30-min",
+            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 2 } }
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var createBody = await create.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        var reqId = createBody.GetProperty("requisitionId").GetGuid();
+
+        var approve = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/approve", new
+        {
+            approvedByUserId = InventoryManagerUser,
+            approvalNote = "Within policy limits."
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, approve.StatusCode);
+
+        var pick = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/pick-and-pack", new
+        {
+            pickedByUserId = InventoryManagerUser
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, pick.StatusCode);
+
+        var delivery = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/delivery-task", new
+        {
+            assignedToId = LogisticsUser
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.Created, delivery.StatusCode);
+        var taskBody = await delivery.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        var taskId = taskBody.GetProperty("taskId").GetGuid();
+
+        var accept = await _client.PostAsync($"/api/delivery-tasks/{taskId}/accept", null);
+        Assert.Equal(HttpStatusCode.OK, accept.StatusCode);
+        var arrive = await _client.PostAsync($"/api/delivery-tasks/{taskId}/arrive", null);
+        Assert.Equal(HttpStatusCode.OK, arrive.StatusCode);
+
+        var confirm = await _client.PostAsync($"/api/requisitions/{reqId}/confirm-receipt", null);
+        Assert.Equal(HttpStatusCode.OK, confirm.StatusCode);
+        var confirmed = await confirm.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        Assert.Equal("Completed", confirmed.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task DashboardAndReports_ReturnSuccess()
+    {
+        var kpi = await _client.GetAsync("/api/dashboard/kpis");
+        Assert.Equal(HttpStatusCode.OK, kpi.StatusCode);
+
+        var lowStock = await _client.GetAsync("/api/reports/low-stock-risk");
+        Assert.Equal(HttpStatusCode.OK, lowStock.StatusCode);
+
+        var dept = await _client.GetAsync("/api/reports/consumption-by-department?days=30");
+        Assert.Equal(HttpStatusCode.OK, dept.StatusCode);
+    }
+
+    [Fact]
+    public async Task ApproveRequisition_WithMedicalStaffRole_ReturnsBadRequest()
+    {
+        var create = await _client.PostAsJsonAsync("/api/requisitions/standard", new
+        {
+            requestedById = MedicalUser,
+            deliveryLocation = "ER-Bed-03",
+            targetDeliveryWindow = "routine",
+            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 1 } }
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var createBody = await create.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        var reqId = createBody.GetProperty("requisitionId").GetGuid();
+
+        var approve = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/approve", new
+        {
+            approvedByUserId = MedicalUser,
+            approvalNote = "should fail"
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.BadRequest, approve.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateDeliveryTask_WithNonLogisticsUser_ReturnsBadRequest()
+    {
+        var reqId = await CreateAndApproveStandardRequisition();
+        var pick = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/pick-and-pack", new
+        {
+            pickedByUserId = InventoryManagerUser
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, pick.StatusCode);
+
+        var delivery = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/delivery-task", new
+        {
+            assignedToId = InventoryManagerUser
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.BadRequest, delivery.StatusCode);
+    }
+
+    [Fact]
+    public async Task ConfirmReceipt_BeforeArrive_ReturnsBadRequest()
+    {
+        var reqId = await CreateAndApproveStandardRequisition();
+        var pick = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/pick-and-pack", new
+        {
+            pickedByUserId = InventoryManagerUser
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, pick.StatusCode);
+
+        var delivery = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/delivery-task", new
+        {
+            assignedToId = LogisticsUser
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.Created, delivery.StatusCode);
+        var taskBody = await delivery.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        var taskId = taskBody.GetProperty("taskId").GetGuid();
+
+        var accept = await _client.PostAsync($"/api/delivery-tasks/{taskId}/accept", null);
+        Assert.Equal(HttpStatusCode.OK, accept.StatusCode);
+
+        var confirm = await _client.PostAsync($"/api/requisitions/{reqId}/confirm-receipt", null);
+        Assert.Equal(HttpStatusCode.BadRequest, confirm.StatusCode);
+    }
+
+    [Fact]
+    public async Task Notifications_AfterCompletion_ContainsCompletedStage()
+    {
+        var create = await _client.PostAsJsonAsync("/api/requisitions/standard", new
+        {
+            requestedById = MedicalUser,
+            deliveryLocation = "OR-01",
+            targetDeliveryWindow = "urgent",
+            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 1 } }
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var createBody = await create.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        var reqId = createBody.GetProperty("requisitionId").GetGuid();
+
+        var approve = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/approve", new
+        {
+            approvedByUserId = InventoryManagerUser,
+            approvalNote = "approved"
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, approve.StatusCode);
+
+        var pick = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/pick-and-pack", new
+        {
+            pickedByUserId = InventoryManagerUser
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, pick.StatusCode);
+
+        var delivery = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/delivery-task", new
+        {
+            assignedToId = LogisticsUser
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.Created, delivery.StatusCode);
+        var taskBody = await delivery.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        var taskId = taskBody.GetProperty("taskId").GetGuid();
+
+        var accept = await _client.PostAsync($"/api/delivery-tasks/{taskId}/accept", null);
+        Assert.Equal(HttpStatusCode.OK, accept.StatusCode);
+        var arrive = await _client.PostAsync($"/api/delivery-tasks/{taskId}/arrive", null);
+        Assert.Equal(HttpStatusCode.OK, arrive.StatusCode);
+        var confirm = await _client.PostAsync($"/api/requisitions/{reqId}/confirm-receipt", null);
+        Assert.Equal(HttpStatusCode.OK, confirm.StatusCode);
+
+        var feedRes = await _client.GetAsync($"/api/requisitions/{reqId}/notifications");
+        Assert.Equal(HttpStatusCode.OK, feedRes.StatusCode);
+        var feed = await feedRes.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        Assert.Equal(JsonValueKind.Array, feed.ValueKind);
+        Assert.Contains(feed.EnumerateArray(), e => e.GetProperty("stage").GetString() == "completed");
     }
 
     private async Task<int> GetSatelliteOnHand(Guid itemId)
@@ -149,5 +357,27 @@ public sealed class ApiIntegrationTests(ApiWebApplicationFactory factory) : ICla
                 return g.GetProperty("totalOnHand").GetInt32();
         }
         return 0;
+    }
+
+    private async Task<Guid> CreateAndApproveStandardRequisition()
+    {
+        var create = await _client.PostAsJsonAsync("/api/requisitions/standard", new
+        {
+            requestedById = MedicalUser,
+            deliveryLocation = "ER-Bed-08",
+            targetDeliveryWindow = "routine",
+            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 1 } }
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var createBody = await create.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        var reqId = createBody.GetProperty("requisitionId").GetGuid();
+
+        var approve = await _client.PostAsJsonAsync($"/api/requisitions/{reqId}/approve", new
+        {
+            approvedByUserId = InventoryManagerUser,
+            approvalNote = "approved for testing"
+        }, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, approve.StatusCode);
+        return reqId;
     }
 }

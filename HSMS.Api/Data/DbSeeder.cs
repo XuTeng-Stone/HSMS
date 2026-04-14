@@ -135,6 +135,52 @@ public static class DbSeeder
             Inv(centralId, itemH.ItemId, "SYR-10-771", exp1, 880, "CEN-F05-01", P(centralId, "CEN-F05-01"), "F05", 5, 72, 55),
             Inv(centralId, itemH.ItemId, "SYR-10-772", exp2, 540, "CEN-F05-02", P(centralId, "CEN-F05-02"), "F05", 6, 78, 55));
 
+        db.Users.AddRange(
+            new MedicalStaff
+            {
+                UserId = Guid.Parse("33333333-3333-3333-3333-333333333301"),
+                FullName = "Dr. Emily Carter",
+                Email = "emily.carter@hsms.local",
+                Department = "ER",
+                ContactNumber = "1001",
+                SystemRole = SystemRole.MedicalStaff,
+                IsActive = true,
+                LicenseNumber = "MD-ER-1001"
+            },
+            new MedicalStaff
+            {
+                UserId = Guid.Parse("33333333-3333-3333-3333-333333333302"),
+                FullName = "Nurse Liam Brooks",
+                Email = "liam.brooks@hsms.local",
+                Department = "OR",
+                ContactNumber = "1002",
+                SystemRole = SystemRole.MedicalStaff,
+                IsActive = true,
+                LicenseNumber = "RN-OR-1002"
+            },
+            new InventoryManager
+            {
+                UserId = Guid.Parse("33333333-3333-3333-3333-333333333303"),
+                FullName = "Ava Thompson",
+                Email = "ava.thompson@hsms.local",
+                Department = "Supply Chain",
+                ContactNumber = "2001",
+                SystemRole = SystemRole.InventoryManager,
+                IsActive = true,
+                AssignedWarehouseZone = "A"
+            },
+            new LogisticsStaff
+            {
+                UserId = Guid.Parse("33333333-3333-3333-3333-333333333304"),
+                FullName = "Noah Patel",
+                Email = "noah.patel@hsms.local",
+                Department = "Logistics",
+                ContactNumber = "3001",
+                SystemRole = SystemRole.LogisticsStaff,
+                IsActive = true,
+                ActiveVehicleId = "VAN-01"
+            });
+
         await db.SaveChangesAsync();
     }
 
