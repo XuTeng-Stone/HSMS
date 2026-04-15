@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=7" />
 </head>
 <body>
   <div class="app">
@@ -25,6 +25,7 @@
           <button type="button" class="nav-btn" data-view="stock">Stock &amp; locations</button>
           <button type="button" class="nav-btn" data-view="levels">Warehouse levels</button>
           <button type="button" class="nav-btn" data-view="transfers">Transfers</button>
+          <button type="button" class="nav-btn" data-view="requisitions">Requisitions</button>
         </nav>
         <a class="link-api" href="/swagger" target="_blank" rel="noopener">API docs</a>
       </div>
@@ -130,6 +131,87 @@
           <div id="tr-orders" class="stack"></div>
         </div>
       </section>
+
+      <section id="view-requisitions" class="view hidden">
+        <div class="panel">
+          <h2 class="h2">Requisitions</h2>
+          <p class="muted">Create standard or emergency requests, then run the full lifecycle: approve → pick/pack → dispatch → arrive → confirm receipt.</p>
+          <div class="row gap wrap">
+            <label class="field grow">
+              <span class="label">Requester (medical staff)</span>
+              <select id="rq-requester" class="input select"></select>
+            </label>
+            <label class="field grow">
+              <span class="label">Delivery location</span>
+              <input id="rq-location" class="input" placeholder="e.g., OR-02 / ER-Bed-05" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span class="label">Type</span>
+              <select id="rq-type" class="input select">
+                <option value="standard">Standard</option>
+                <option value="emergency">Emergency</option>
+              </select>
+            </label>
+          </div>
+          <div class="row gap wrap" style="margin-top:0.75rem">
+            <label class="field grow" id="rq-window-wrap">
+              <span class="label">Target window</span>
+              <input id="rq-window" class="input" value="within-30-min" autocomplete="off" />
+            </label>
+            <label class="field grow hidden" id="rq-just-wrap">
+              <span class="label">Justification code</span>
+              <input id="rq-just" class="input" value="CRITICAL_SURGERY" autocomplete="off" />
+            </label>
+            <label class="field grow">
+              <span class="label">Item</span>
+              <select id="rq-item" class="input select"></select>
+            </label>
+            <label class="field narrow">
+              <span class="label">Qty</span>
+              <input type="number" id="rq-qty" class="input" min="1" value="2" />
+            </label>
+            <button type="button" class="btn secondary" id="rq-add-line">Add line</button>
+            <button type="button" class="btn primary" id="rq-create">Create request</button>
+          </div>
+          <div class="panel-inner" id="rq-lines"></div>
+        </div>
+
+        <div class="panel">
+          <div class="row gap wrap" style="justify-content:space-between;align-items:center">
+            <div>
+              <h3 class="h3" style="margin:0">Queue</h3>
+              <p class="muted" style="margin:0.35rem 0 0">Emergency requests appear first when queue ordering is enabled.</p>
+            </div>
+            <div class="row gap wrap">
+              <label class="field">
+                <span class="label">Filter status</span>
+                <select id="rq-status" class="input select">
+                  <option value="">All</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Approved">Approved</option>
+                  <option value="InTransit">InTransit</option>
+                  <option value="Completed">Completed</option>
+                  <option value="Cancelled">Cancelled</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="label">Queue order</span>
+                <select id="rq-queue" class="input select">
+                  <option value="true">On</option>
+                  <option value="false">Off</option>
+                </select>
+              </label>
+              <button type="button" class="btn primary" id="rq-refresh">Refresh</button>
+            </div>
+          </div>
+          <div id="rq-list" class="stack" style="margin-top:1rem"></div>
+        </div>
+
+        <div class="panel">
+          <h3 class="h3">Selected requisition</h3>
+          <div id="rq-detail" class="stack"></div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -144,6 +226,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

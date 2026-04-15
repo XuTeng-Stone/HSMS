@@ -184,6 +184,65 @@ public static class DbSeeder
         await db.SaveChangesAsync();
     }
 
+    public static async Task EnsureDemoUsersAsync(AppDbContext db)
+    {
+        async Task AddIfMissingAsync(User user)
+        {
+            if (!await db.Users.AsNoTracking().AnyAsync(u => u.UserId == user.UserId))
+                db.Users.Add(user);
+        }
+
+        await AddIfMissingAsync(
+            new MedicalStaff
+            {
+                UserId = Guid.Parse("33333333-3333-3333-3333-333333333301"),
+                FullName = "Dr. Emily Carter",
+                Email = "emily.carter@hsms.local",
+                Department = "ER",
+                ContactNumber = "1001",
+                SystemRole = SystemRole.MedicalStaff,
+                IsActive = true,
+                LicenseNumber = "MD-ER-1001"
+            });
+        await AddIfMissingAsync(
+            new MedicalStaff
+            {
+                UserId = Guid.Parse("33333333-3333-3333-3333-333333333302"),
+                FullName = "Nurse Liam Brooks",
+                Email = "liam.brooks@hsms.local",
+                Department = "OR",
+                ContactNumber = "1002",
+                SystemRole = SystemRole.MedicalStaff,
+                IsActive = true,
+                LicenseNumber = "RN-OR-1002"
+            });
+        await AddIfMissingAsync(
+            new InventoryManager
+            {
+                UserId = Guid.Parse("33333333-3333-3333-3333-333333333303"),
+                FullName = "Ava Thompson",
+                Email = "ava.thompson@hsms.local",
+                Department = "Supply Chain",
+                ContactNumber = "2001",
+                SystemRole = SystemRole.InventoryManager,
+                IsActive = true,
+                AssignedWarehouseZone = "A"
+            });
+        await AddIfMissingAsync(
+            new LogisticsStaff
+            {
+                UserId = Guid.Parse("33333333-3333-3333-3333-333333333304"),
+                FullName = "Noah Patel",
+                Email = "noah.patel@hsms.local",
+                Department = "Logistics",
+                ContactNumber = "3001",
+                SystemRole = SystemRole.LogisticsStaff,
+                IsActive = true,
+                ActiveVehicleId = "VAN-01"
+            });
+        await db.SaveChangesAsync();
+    }
+
     private static Item NewItem(string id, ItemCategory cat, string name, string spec, string uom, int min)
     {
         return new Item

@@ -45,6 +45,49 @@ public sealed class ApiIntegrationTests(ApiWebApplicationFactory factory) : ICla
     }
 
     [Fact]
+    public async Task GetItems_UsesCamelCaseItemIdForUiBinding()
+    {
+        var res = await _client.GetAsync("/api/items");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var list = await res.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        var first = list[0];
+        Assert.True(first.TryGetProperty("itemId", out var idEl), "itemId must be camelCase for browser JSON binding.");
+        Assert.NotEqual(Guid.Empty, idEl.GetGuid());
+    }
+
+    [Fact]
+    public async Task GetUsers_MedicalStaff_ReturnsSeededUsersAndCamelCase()
+    {
+        var res = await _client.GetAsync("/api/users?role=MedicalStaff");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var list = await res.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        Assert.True(list.GetArrayLength() >= 1);
+        var ids = new List<Guid>();
+        foreach (var u in list.EnumerateArray())
+        {
+            Assert.True(u.TryGetProperty("userId", out _), "userId must be camelCase for browser JSON binding.");
+            Assert.True(u.TryGetProperty("role", out var roleEl));
+            Assert.Equal("MedicalStaff", roleEl.GetString());
+            ids.Add(u.GetProperty("userId").GetGuid());
+        }
+        Assert.Contains(MedicalUser, ids);
+    }
+
+    [Fact]
+    public async Task PostStandardRequisition_ReturnsCreated()
+    {
+        var body = new
+        {
+            requestedById = MedicalUser,
+            deliveryLocation = "ER-Bed-demo",
+            targetDeliveryWindow = "routine",
+            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 1 } }
+        };
+        var res = await _client.PostAsJsonAsync("/api/requisitions/standard", body, JsonOpts);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+    }
+
+    [Fact]
     public async Task GetInventoryLevels_IncludesReplenishmentFlags()
     {
         var res = await _client.GetAsync("/api/inventory/levels");

@@ -12,6 +12,24 @@ function showToast(message, type = "ok") {
   }, 4200);
 }
 
+function extractHttpErrorMessage(res, data, text) {
+  if (typeof data === "string" && data.trim()) return data.trim();
+  if (typeof data === "object" && data !== null) {
+    if (data.error) return String(data.error);
+    if (data.errors && typeof data.errors === "object") {
+      const parts = [];
+      for (const k of Object.keys(data.errors)) {
+        const arr = data.errors[k];
+        if (Array.isArray(arr)) parts.push(k + ": " + arr.join(", "));
+      }
+      if (parts.length) return parts.join("; ");
+    }
+    if (data.title) return String(data.title);
+    if (data.detail) return String(data.detail);
+  }
+  return (text && String(text).trim()) || res.statusText || "Request failed";
+}
+
 async function apiJson(path, options = {}) {
   const res = await fetch(path, {
     headers: { Accept: "application/json", "Content-Type": "application/json", ...(options.headers || {}) },
@@ -27,13 +45,7 @@ async function apiJson(path, options = {}) {
     }
   }
   if (!res.ok) {
-    const msg =
-      typeof data === "object" && data !== null && data.error
-        ? String(data.error)
-        : typeof data === "string"
-          ? data
-          : res.statusText;
-    throw new Error(msg || "Request failed");
+    throw new Error(extractHttpErrorMessage(res, data, text));
   }
   return data;
 }
@@ -327,6 +339,88 @@ async function openPlacementMap() {
 let warehouses = [];
 let itemsCache = [];
 let transferDraftLines = [];
+let usersCache = [];
+let rqDraftLines = [];
+let selectedRequisitionId = null;
+
+const ROLE = {
+  admin: "Admin",
+  medical: "MedicalStaff",
+  manager: "InventoryManager",
+  logistics: "LogisticsStaff",
+};
+
+const SEEDED = {
+  medical: "33333333-3333-3333-3333-333333333301",
+  manager: "33333333-3333-3333-3333-333333333303",
+  logistics: "33333333-3333-3333-3333-333333333304",
+};
+
+function normalizeItem(i) {
+  return {
+    itemId: i.itemId ?? i.ItemId,
+    itemName: i.itemName ?? i.ItemName,
+    category: i.category ?? i.Category,
+    unitOfMeasure: i.unitOfMeasure ?? i.UnitOfMeasure,
+    specificationText: i.specificationText ?? i.SpecificationText,
+    minimumThreshold: i.minimumThreshold ?? i.MinimumThreshold ?? 0,
+  };
+}
+
+function normalizeUser(u) {
+  const rawRole = u.role ?? u.Role;
+  let roleStr = "";
+  if (typeof rawRole === "number" && Number.isFinite(rawRole)) {
+    const names = ["Admin", "MedicalStaff", "InventoryManager", "LogisticsStaff"];
+    roleStr = names[rawRole] ?? String(rawRole);
+  } else {
+    roleStr = String(rawRole ?? "");
+  }
+  return {
+    userId: u.userId ?? u.UserId,
+    fullName: u.fullName ?? u.FullName,
+    email: u.email ?? u.Email,
+    department: u.department ?? u.Department,
+    role: roleStr,
+    isActive: u.isActive ?? u.IsActive ?? true,
+  };
+}
+
+function buildMedicalRequesterOptions(users) {
+  const out = [];
+  const seen = new Set();
+  const add = (id, label) => {
+    const sid = String(id || "").trim();
+    if (!sid) return;
+    const k = sid.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ id: sid, label });
+  };
+  for (const u of users) {
+    if (!u.isActive) continue;
+    if (u.role !== ROLE.medical) continue;
+    if (!u.userId) continue;
+    add(u.userId, `${u.fullName} (${u.department || ""})`.trim());
+  }
+  add(SEEDED.medical, "Dr. Emily Carter (ER)");
+  add("33333333-3333-3333-3333-333333333302", "Nurse Liam Brooks (OR)");
+  return out;
+}
+
+function applyRequisitionFormSelects() {
+  const itemOpts =
+    '<option value="">Select item</option>' +
+    itemsCache.map((i) => `<option value="${i.itemId}">${esc(i.itemName)}</option>`).join("");
+  $("#rq-item").innerHTML = itemOpts;
+
+  const requesters = buildMedicalRequesterOptions(usersCache);
+  const reqOpts = requesters.map((o) => `<option value="${o.id}">${esc(o.label)}</option>`).join("");
+  $("#rq-requester").innerHTML = reqOpts;
+  const preferred = SEEDED.medical.toLowerCase();
+  const match = requesters.find((o) => o.id.toLowerCase() === preferred);
+  $("#rq-requester").value = match ? match.id : requesters[0].id;
+}
 
 function setView(name) {
   $$(".view").forEach((v) => v.classList.add("hidden"));
@@ -349,13 +443,29 @@ async function loadWarehouses() {
 }
 
 async function loadItemsIntoSelects() {
-  itemsCache = await apiJson("/api/items");
+  const raw = await apiJson("/api/items");
+  itemsCache = Array.isArray(raw) ? raw.map(normalizeItem) : [];
   const opts = itemsCache
     .map((i) => `<option value="${i.itemId}">${esc(i.itemName)}</option>`)
     .join("");
   $("#stock-item").innerHTML = '<option value="">Select item</option>' + opts;
-  $("#tr-item").innerHTML = opts;
+  $("#tr-item").innerHTML = '<option value="">Select item</option>' + opts;
+  applyRequisitionFormSelects();
   syncStockMapButton();
+}
+
+async function loadUsers() {
+  const raw = await apiJson("/api/users");
+  usersCache = Array.isArray(raw) ? raw.map(normalizeUser) : [];
+  applyRequisitionFormSelects();
+}
+
+async function hydrateRequisitionsView() {
+  if (!itemsCache.length) await loadItemsIntoSelects();
+  else applyRequisitionFormSelects();
+  await loadUsers();
+  await refreshRequisitionQueue();
+  if (selectedRequisitionId) await loadRequisitionDetail(selectedRequisitionId);
 }
 
 async function runCatalogSearch() {
@@ -365,7 +475,8 @@ async function runCatalogSearch() {
   if (q) params.set("q", q);
   if (cat) params.set("category", cat);
   const qs = params.toString();
-  const list = await apiJson("/api/items" + (qs ? "?" + qs : ""));
+  const raw = await apiJson("/api/items" + (qs ? "?" + qs : ""));
+  const list = Array.isArray(raw) ? raw.map(normalizeItem) : [];
   const grid = $("#catalog-results");
   if (!list.length) {
     grid.innerHTML = '<p class="empty">No items match your search.</p>';
@@ -566,7 +677,11 @@ async function loadOrders() {
 $("#nav").addEventListener("click", (e) => {
   const btn = e.target.closest(".nav-btn");
   if (!btn) return;
-  setView(btn.dataset.view);
+  const view = btn.dataset.view;
+  setView(view);
+  if (view === "requisitions") {
+    hydrateRequisitionsView().catch((err) => showToast(err.message, "error"));
+  }
 });
 
 $("#catalog-search").addEventListener("click", () => {
@@ -640,15 +755,276 @@ $("#tr-submit").addEventListener("click", async () => {
   }
 });
 
+(function initRequisitionTypeToggle() {
+  const typeEl = $("#rq-type");
+  const windowWrap = $("#rq-window-wrap");
+  const justWrap = $("#rq-just-wrap");
+  function sync() {
+    const isEmergency = typeEl.value === "emergency";
+    windowWrap.classList.toggle("hidden", isEmergency);
+    justWrap.classList.toggle("hidden", !isEmergency);
+  }
+  typeEl.addEventListener("change", sync);
+  sync();
+})();
+
+function renderRqLines() {
+  const host = $("#rq-lines");
+  if (!rqDraftLines.length) {
+    host.innerHTML = '<p class="muted" style="margin:0">No lines yet. Add item and quantity.</p>';
+    return;
+  }
+  host.innerHTML =
+    '<div style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);margin-bottom:0.5rem">Draft lines</div>' +
+    rqDraftLines
+      .map(
+        (l, idx) => `
+      <div class="tr-line-row">
+        <span>${esc(l.itemName)}</span>
+        <span><strong>${l.quantity}</strong></span>
+        <button type="button" class="btn ghost small" data-rq-rm="${idx}">Remove</button>
+      </div>`
+      )
+      .join("");
+  host.querySelectorAll("[data-rq-rm]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      rqDraftLines.splice(parseInt(btn.dataset.rqRm, 10), 1);
+      renderRqLines();
+    });
+  });
+}
+
+$("#rq-add-line").addEventListener("click", () => {
+  const itemId = $("#rq-item").value;
+  const qty = parseInt($("#rq-qty").value, 10);
+  if (!itemId) {
+    showToast("Select an item.", "error");
+    return;
+  }
+  if (!qty || qty < 1) {
+    showToast("Enter a valid quantity.", "error");
+    return;
+  }
+  const item = itemsCache.find((i) => i.itemId === itemId);
+  rqDraftLines.push({ itemId, itemName: item ? item.itemName : itemId, quantity: qty });
+  renderRqLines();
+});
+
+async function createRequisition() {
+  if (!rqDraftLines.length) {
+    showToast("Add at least one line.", "error");
+    return;
+  }
+  const guidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const requesterId = $("#rq-requester").value.trim();
+  if (!guidRe.test(requesterId)) {
+    showToast("Requester is invalid. Open the Requisitions tab again to reload users.", "error");
+    return;
+  }
+  for (const l of rqDraftLines) {
+    if (!guidRe.test(String(l.itemId || "").trim())) {
+      showToast("A line has an invalid item. Pick the item again and re-add the line.", "error");
+      return;
+    }
+  }
+  const loc = $("#rq-location").value.trim();
+  if (!loc) {
+    showToast("Enter a delivery location.", "error");
+    return;
+  }
+  const type = $("#rq-type").value;
+  const base = {
+    requestedById: requesterId,
+    deliveryLocation: loc,
+    lines: rqDraftLines.map((l) => ({ itemId: String(l.itemId).trim(), quantity: l.quantity })),
+  };
+  let path = "/api/requisitions/standard";
+  let body = { ...base, targetDeliveryWindow: $("#rq-window").value.trim() || "routine" };
+  if (type === "emergency") {
+    path = "/api/requisitions/emergency";
+    body = { ...base, justificationCode: $("#rq-just").value.trim() || "CRITICAL" };
+  }
+  const created = await apiJson(path, { method: "POST", body: JSON.stringify(body) });
+  const id = created.requisitionId || created.RequisitionId;
+  selectedRequisitionId = id;
+  showToast("Requisition created.");
+  rqDraftLines = [];
+  renderRqLines();
+  $("#rq-location").value = "";
+  await refreshRequisitionQueue();
+  await loadRequisitionDetail(id);
+}
+
+$("#rq-create").addEventListener("click", () => {
+  createRequisition().catch((e) => showToast(e.message, "error"));
+});
+
+async function refreshRequisitionQueue() {
+  const params = new URLSearchParams();
+  const status = $("#rq-status").value;
+  const queueOrder = $("#rq-queue").value;
+  if (status) params.set("status", status);
+  params.set("queueOrder", queueOrder);
+  const list = await apiJson("/api/requisitions?" + params.toString());
+  const host = $("#rq-list");
+  if (!list.length) {
+    host.innerHTML = '<p class="empty">No requisitions found.</p>';
+    return;
+  }
+  host.innerHTML = list
+    .map((r) => {
+      const emergency = r.isEmergency;
+      const badge = emergency ? '<span class="pill emergency">Emergency</span>' : '<span class="pill">Standard</span>';
+      return `
+      <div class="rq-card">
+        <div class="rq-head">
+          <span class="rq-id">${esc(r.requisitionId)}</span>
+          <div class="row gap wrap" style="align-items:center">
+            ${badge}
+            <span class="badge ${r.status === "Completed" ? "" : r.status === "Cancelled" ? "danger" : "pharma"}">${esc(r.status)}</span>
+          </div>
+        </div>
+        <p class="rq-meta">${esc(r.requestedByName)} · ${esc(r.deliveryLocation)} · requested ${r.requestedTotal} / fulfilled ${r.fulfilledTotal}</p>
+        <div class="rq-actions">
+          <button type="button" class="btn secondary small" data-rq-open="${esc(r.requisitionId)}">Open</button>
+        </div>
+      </div>`;
+    })
+    .join("");
+  host.querySelectorAll("[data-rq-open]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.rqOpen;
+      selectedRequisitionId = id;
+      loadRequisitionDetail(id).catch((e) => showToast(e.message, "error"));
+    });
+  });
+}
+
+$("#rq-refresh").addEventListener("click", () => {
+  refreshRequisitionQueue().catch((e) => showToast(e.message, "error"));
+});
+
+async function loadRequisitionDetail(id) {
+  const detail = await apiJson("/api/requisitions/" + encodeURIComponent(id));
+  const host = $("#rq-detail");
+  const lines = (detail.lines || []).map((l) => `<tr><td>${esc(l.itemName)}</td><td>${l.requestedQuantity}</td><td>${l.fulfilledQuantity}</td></tr>`).join("");
+  const delivery = detail.deliveryTask;
+  const deliveryHtml = delivery
+    ? `<p class="rq-meta">Delivery task: <span class="rq-id">${esc(delivery.taskId)}</span> · ${esc(delivery.deliveryStatus)} · courier ${esc(delivery.assignedToName || "—")}</p>`
+    : `<p class="rq-meta">Delivery task: —</p>`;
+
+  const buttons = [];
+  if (detail.status === "Pending") buttons.push(`<button type="button" class="btn primary small" data-rq-act="approve">Approve</button>`);
+  if (detail.status === "Approved") buttons.push(`<button type="button" class="btn primary small" data-rq-act="pick">Pick & pack</button>`);
+  if (detail.status === "Approved") buttons.push(`<button type="button" class="btn secondary small" data-rq-act="dispatch">Create delivery</button>`);
+  if (delivery && delivery.deliveryStatus === "Pending") buttons.push(`<button type="button" class="btn primary small" data-rq-act="accept">Courier accept</button>`);
+  if (delivery && delivery.deliveryStatus === "InTransit") buttons.push(`<button type="button" class="btn primary small" data-rq-act="arrive">Mark arrived</button>`);
+  if (detail.status === "InTransit" && delivery && delivery.deliveryStatus === "Arrived") buttons.push(`<button type="button" class="btn primary small" data-rq-act="confirm">Confirm receipt</button>`);
+  buttons.push(`<button type="button" class="btn ghost small" data-rq-act="refresh">Refresh detail</button>`);
+
+  host.innerHTML = `
+    <div class="rq-card">
+      <div class="rq-head">
+        <span class="rq-id">${esc(detail.requisitionId)}</span>
+        <div class="row gap wrap" style="align-items:center">
+          ${detail.isEmergency ? '<span class="pill emergency">Emergency</span>' : '<span class="pill">Standard</span>'}
+          <span class="badge ${detail.status === "Completed" ? "" : detail.status === "Cancelled" ? "danger" : "pharma"}">${esc(detail.status)}</span>
+        </div>
+      </div>
+      <p class="rq-meta">${esc(detail.requestedByName)} · ${esc(detail.deliveryLocation)} · ${new Date(detail.requestDate).toLocaleString()}</p>
+      ${deliveryHtml}
+      <table class="mini-table">
+        <thead><tr><th>Item</th><th>Requested</th><th>Fulfilled</th></tr></thead>
+        <tbody>${lines}</tbody>
+      </table>
+      <div class="rq-actions">${buttons.join("")}</div>
+      <div class="panel-inner" style="margin-top:1rem">
+        <div class="row gap wrap">
+          <button type="button" class="btn secondary small" data-rq-feed="notifications">Load notifications</button>
+          <button type="button" class="btn secondary small" data-rq-feed="timeline">Load timeline</button>
+        </div>
+        <div id="rq-feed" class="stack" style="margin-top:0.75rem"></div>
+      </div>
+    </div>
+  `;
+
+  host.querySelectorAll("[data-rq-act]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const act = btn.dataset.rqAct;
+      runRequisitionAction(detail, act).catch((e) => showToast(e.message, "error"));
+    });
+  });
+
+  host.querySelectorAll("[data-rq-feed]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const kind = btn.dataset.rqFeed;
+      loadRequisitionFeed(detail.requisitionId, kind).catch((e) => showToast(e.message, "error"));
+    });
+  });
+}
+
+async function runRequisitionAction(detail, action) {
+  const reqId = detail.requisitionId;
+  if (action === "refresh") {
+    await loadRequisitionDetail(reqId);
+    return;
+  }
+  if (action === "approve") {
+    const note = detail.isEmergency ? "Emergency request approved." : "Within policy limits.";
+    await apiJson(`/api/requisitions/${reqId}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ approvedByUserId: SEEDED.manager, approvalNote: note }),
+    });
+    showToast("Approved.");
+  } else if (action === "pick") {
+    await apiJson(`/api/requisitions/${reqId}/pick-and-pack`, { method: "POST", body: JSON.stringify({ pickedByUserId: SEEDED.manager }) });
+    showToast("Picked and packed.");
+  } else if (action === "dispatch") {
+    await apiJson(`/api/requisitions/${reqId}/delivery-task`, { method: "POST", body: JSON.stringify({ assignedToId: SEEDED.logistics }) });
+    showToast("Delivery task created.");
+  } else if (action === "accept") {
+    const latest = await apiJson("/api/requisitions/" + reqId);
+    if (!latest.deliveryTask) throw new Error("Delivery task not found.");
+    await apiJson(`/api/delivery-tasks/${latest.deliveryTask.taskId}/accept`, { method: "POST" });
+    showToast("Courier accepted.");
+  } else if (action === "arrive") {
+    const latest = await apiJson("/api/requisitions/" + reqId);
+    if (!latest.deliveryTask) throw new Error("Delivery task not found.");
+    await apiJson(`/api/delivery-tasks/${latest.deliveryTask.taskId}/arrive`, { method: "POST" });
+    showToast("Marked arrived.");
+  } else if (action === "confirm") {
+    await apiJson(`/api/requisitions/${reqId}/confirm-receipt`, { method: "POST" });
+    showToast("Receipt confirmed.");
+  }
+  await refreshRequisitionQueue();
+  await loadRequisitionDetail(reqId);
+}
+
+async function loadRequisitionFeed(reqId, kind) {
+  const host = $("#rq-feed");
+  host.innerHTML = '<p class="muted" style="margin:0">Loading…</p>';
+  const data = await apiJson(`/api/requisitions/${reqId}/${kind}`);
+  if (!data || !data.length) {
+    host.innerHTML = '<p class="muted" style="margin:0">No entries.</p>';
+    return;
+  }
+  host.innerHTML = data
+    .map((e) => `<div class="rq-card" style="padding:0.75rem 0.9rem"><div class="rq-head"><span class="pill">${esc(e.stage)}</span><span class="rq-id">${new Date(e.timestamp).toLocaleString()}</span></div><p class="rq-meta" style="margin-top:0.4rem">${esc(e.message)}</p></div>`)
+    .join("");
+}
+
 (async function init() {
   try {
     await loadWarehouses();
     await loadItemsIntoSelects();
+    await loadUsers();
     syncStockMapButton();
     await runCatalogSearch();
     await loadLevels();
     renderTransferLines();
     await loadOrders();
+    renderRqLines();
+    await refreshRequisitionQueue();
   } catch (e) {
     showToast(e.message || "Failed to load data. Is the API running?", "error");
   }
