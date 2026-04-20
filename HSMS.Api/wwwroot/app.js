@@ -16,6 +16,8 @@ function extractHttpErrorMessage(res, data, text) {
   if (typeof data === "string" && data.trim()) return data.trim();
   if (typeof data === "object" && data !== null) {
     if (data.error) return String(data.error);
+    if (Array.isArray(data.errors) && data.errors.length)
+      return data.errors.map((x) => String(x)).join("; ");
     if (data.errors && typeof data.errors === "object") {
       const parts = [];
       for (const k of Object.keys(data.errors)) {
@@ -386,7 +388,7 @@ function normalizeUser(u) {
   };
 }
 
-function buildMedicalRequesterOptions(users) {
+function buildRequesterOptions(users) {
   const out = [];
   const seen = new Set();
   const add = (id, label) => {
@@ -399,12 +401,15 @@ function buildMedicalRequesterOptions(users) {
   };
   for (const u of users) {
     if (!u.isActive) continue;
-    if (u.role !== ROLE.medical) continue;
     if (!u.userId) continue;
-    add(u.userId, `${u.fullName} (${u.department || ""})`.trim());
+    if (u.role === ROLE.medical)
+      add(u.userId, `${u.fullName} (${u.department || ""})`.trim());
+    else if (u.role === ROLE.manager)
+      add(u.userId, `${u.fullName} (inventory / central hub)`.trim());
   }
   add(SEEDED.medical, "Dr. Emily Carter (ER)");
   add("33333333-3333-3333-3333-333333333302", "Nurse Liam Brooks (OR)");
+  add(SEEDED.manager, "Ava Thompson (inventory manager)");
   return out;
 }
 
@@ -414,7 +419,7 @@ function applyRequisitionFormSelects() {
     itemsCache.map((i) => `<option value="${i.itemId}">${esc(i.itemName)}</option>`).join("");
   $("#rq-item").innerHTML = itemOpts;
 
-  const requesters = buildMedicalRequesterOptions(usersCache);
+  const requesters = buildRequesterOptions(usersCache);
   const reqOpts = requesters.map((o) => `<option value="${o.id}">${esc(o.label)}</option>`).join("");
   $("#rq-requester").innerHTML = reqOpts;
   const preferred = SEEDED.medical.toLowerCase();
@@ -663,8 +668,10 @@ async function loadOrders() {
   box.querySelectorAll("[data-complete]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       try {
-        await apiJson("/api/stock-transfers/" + btn.dataset.complete + "/complete", { method: "POST" });
-        showToast("Transfer completed and inventory updated.");
+        const done = await apiJson("/api/stock-transfers/" + btn.dataset.complete + "/complete", { method: "POST" });
+        let msg = "Transfer completed and inventory updated.";
+        if (done.warnings && done.warnings.length) msg += " " + done.warnings.join(" ");
+        showToast(msg, "ok");
         await loadOrders();
         await loadLevels();
       } catch (e) {
@@ -745,8 +752,16 @@ $("#tr-submit").addEventListener("click", async () => {
     requestedByUserId: null,
   };
   try {
-    await apiJson("/api/stock-transfers", { method: "POST", body: JSON.stringify(body) });
-    showToast("Transfer order created.");
+    const pre = await apiJson("/api/stock-transfers/validate", { method: "POST", body: JSON.stringify(body) });
+    if (!pre.valid) {
+      showToast((pre.errors && pre.errors.join("; ")) || "Transfer validation failed.", "error");
+      return;
+    }
+    const created = await apiJson("/api/stock-transfers", { method: "POST", body: JSON.stringify(body) });
+    let doneMsg = "Transfer order created.";
+    if (pre.warnings && pre.warnings.length) doneMsg += " " + pre.warnings.join(" ");
+    if (created.warnings && created.warnings.length) doneMsg += " " + created.warnings.join(" ");
+    showToast(doneMsg, "ok");
     transferDraftLines = [];
     renderTransferLines();
     await loadOrders();
@@ -850,7 +865,9 @@ async function createRequisition() {
   showToast("Requisition created.");
   rqDraftLines = [];
   renderRqLines();
-  $("#rq-location").value = "";
+  const locEl = $("#rq-location");
+  if (locEl && locEl.tagName === "SELECT") locEl.selectedIndex = 0;
+  else if (locEl) locEl.value = "";
   await refreshRequisitionQueue();
   await loadRequisitionDetail(id);
 }

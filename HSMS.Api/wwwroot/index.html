@@ -138,12 +138,21 @@
           <p class="muted">Create standard or emergency requests, then run the full lifecycle: approve → pick/pack → dispatch → arrive → confirm receipt.</p>
           <div class="row gap wrap">
             <label class="field grow">
-              <span class="label">Requester (medical staff)</span>
+              <span class="label">Requester</span>
               <select id="rq-requester" class="input select"></select>
             </label>
             <label class="field grow">
               <span class="label">Delivery location</span>
-              <input id="rq-location" class="input" placeholder="e.g., OR-02 / ER-Bed-05" autocomplete="off" />
+              <select id="rq-location" class="input select">
+                <option value="OR-01">OR-01</option>
+                <option value="OR-02">OR-02</option>
+                <option value="ER-Bay-01">ER-Bay-01</option>
+                <option value="ER-Bay-02">ER-Bay-02</option>
+                <option value="ICU-Nurse-Station">ICU nurse station</option>
+                <option value="Ward-3A-Desk">Ward 3A desk</option>
+                <option value="WH_CENTRAL-Issue-Desk">Central hub issue desk</option>
+                <option value="WH_SATELLITE-Receiving">Satellite store receiving</option>
+              </select>
             </label>
             <label class="field">
               <span class="label">Type</span>
@@ -226,6 +235,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>

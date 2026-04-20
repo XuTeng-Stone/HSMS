@@ -152,6 +152,38 @@ public sealed class ApiIntegrationTests(ApiWebApplicationFactory factory) : ICla
     }
 
     [Fact]
+    public async Task PostStockTransferValidate_SourceInsufficient_MarksInvalid()
+    {
+        var body = new
+        {
+            sourceWarehouseId = SatelliteId,
+            destinationWarehouseId = CentralId,
+            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 9_999_999 } }
+        };
+        var res = await _client.PostAsJsonAsync("/api/stock-transfers/validate", body, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var doc = await res.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        Assert.False(doc.GetProperty("valid").GetBoolean());
+        Assert.True(doc.GetProperty("errors").GetArrayLength() >= 1);
+    }
+
+    [Fact]
+    public async Task PostStockTransferValidate_CentralToSatellite_AboveDestinationCeiling_ReturnsWarnings()
+    {
+        var body = new
+        {
+            sourceWarehouseId = CentralId,
+            destinationWarehouseId = SatelliteId,
+            lines = new[] { new { itemId = ItemAmoxicillin, quantity = 400 } }
+        };
+        var res = await _client.PostAsJsonAsync("/api/stock-transfers/validate", body, JsonOpts);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var doc = await res.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        Assert.True(doc.GetProperty("valid").GetBoolean());
+        Assert.True(doc.GetProperty("warnings").GetArrayLength() >= 1);
+    }
+
+    [Fact]
     public async Task PostStockTransfer_WhenSatelliteToCentral_IsAllowedForInterDepartmentTransfer()
     {
         var body = new

@@ -158,10 +158,21 @@ app.MapGet("/api/inventory/levels", async ([FromQuery] Guid? warehouseId, AppDbC
     return Results.Ok(result.OrderBy(x => x.ItemName).ThenBy(x => x.WarehouseCode));
 });
 
+app.MapPost("/api/stock-transfers/validate", async ([FromBody] CreateStockTransferRequest body, AppDbContext db) =>
+{
+    if (body.Lines is null)
+        return Results.BadRequest("Lines are required.");
+    var analysis = await AnalyzeStockTransferAsync(body.SourceWarehouseId, body.DestinationWarehouseId, body.Lines, db);
+    return Results.Ok(analysis);
+});
+
 app.MapPost("/api/stock-transfers", async ([FromBody] CreateStockTransferRequest body, AppDbContext db) =>
 {
     if (body.Lines is null || body.Lines.Count == 0)
         return Results.BadRequest("At least one line is required.");
+    var analysis = await AnalyzeStockTransferAsync(body.SourceWarehouseId, body.DestinationWarehouseId, body.Lines, db);
+    if (!analysis.Valid)
+        return Results.BadRequest(new { errors = analysis.Errors, warnings = analysis.Warnings, lineChecks = analysis.LineChecks });
     var src = await db.Warehouses.FindAsync(body.SourceWarehouseId);
     var dst = await db.Warehouses.FindAsync(body.DestinationWarehouseId);
     if (src is null || dst is null)
@@ -175,13 +186,6 @@ app.MapPost("/api/stock-transfers", async ([FromBody] CreateStockTransferRequest
             return Results.BadRequest("Requester user is invalid or inactive.");
         if (requester.SystemRole is not (SystemRole.InventoryManager or SystemRole.Admin))
             return Results.BadRequest("Only inventory manager or admin can create transfer orders.");
-    }
-    foreach (var line in body.Lines)
-    {
-        if (line.Quantity <= 0)
-            return Results.BadRequest("Line quantity must be positive.");
-        if (!await db.Items.AnyAsync(i => i.ItemId == line.ItemId))
-            return Results.BadRequest($"Unknown item {line.ItemId}.");
     }
     var order = new StockTransferOrder
     {
@@ -204,7 +208,14 @@ app.MapPost("/api/stock-transfers", async ([FromBody] CreateStockTransferRequest
     }
     db.StockTransferOrders.Add(order);
     await db.SaveChangesAsync();
-    return Results.Created($"/api/stock-transfers/{order.StockTransferOrderId}", new { order.StockTransferOrderId, body.Priority, body.Justification });
+    return Results.Created($"/api/stock-transfers/{order.StockTransferOrderId}", new
+    {
+        order.StockTransferOrderId,
+        body.Priority,
+        body.Justification,
+        warnings = analysis.Warnings.Count > 0 ? analysis.Warnings : null,
+        lineChecks = analysis.LineChecks.Count > 0 ? analysis.LineChecks : null
+    });
 });
 
 app.MapPost("/api/stock-transfers/{id:guid}/complete", async (Guid id, [FromBody] CompleteStockTransferRequest? body, AppDbContext db) =>
@@ -227,6 +238,13 @@ app.MapPost("/api/stock-transfers/{id:guid}/complete", async (Guid id, [FromBody
         return Results.BadRequest("Order already completed.");
     if (order.Status == StockTransferOrderStatus.Cancelled)
         return Results.BadRequest("Order is cancelled.");
+    var lineReqs = order.Lines.Select(l => new CreateStockTransferLineRequest(l.ItemId, l.Quantity)).ToList();
+    var preCheck = await AnalyzeStockTransferAsync(order.SourceWarehouseId, order.DestinationWarehouseId, lineReqs, db);
+    if (!preCheck.Valid)
+    {
+        await tx.RollbackAsync();
+        return Results.BadRequest(new { errors = preCheck.Errors, warnings = preCheck.Warnings, lineChecks = preCheck.LineChecks });
+    }
     var recvSlot = await db.StoragePositions.AsNoTracking()
         .Where(p => p.WarehouseId == order.DestinationWarehouseId && p.PositionCode == "RECEIVING")
         .Select(p => new { p.StoragePositionId, p.RackCode, p.MapPercentX, p.MapPercentY })
@@ -285,7 +303,12 @@ app.MapPost("/api/stock-transfers/{id:guid}/complete", async (Guid id, [FromBody
     order.CompletedByUserId = body?.CompletedByUserId;
     await db.SaveChangesAsync();
     await tx.CommitAsync();
-    return Results.Ok(new { order.StockTransferOrderId, order.Status });
+    return Results.Ok(new
+    {
+        order.StockTransferOrderId,
+        order.Status,
+        warnings = preCheck.Warnings.Count > 0 ? preCheck.Warnings : null
+    });
 });
 
 app.MapGet("/api/stock-transfers", async (AppDbContext db) =>
@@ -1150,6 +1173,81 @@ static async Task<IResult?> ValidateRequisitionRequestAsync(
     return null;
 }
 
+static async Task<StockTransferValidationResult> AnalyzeStockTransferAsync(
+    Guid sourceWarehouseId,
+    Guid destinationWarehouseId,
+    IReadOnlyList<CreateStockTransferLineRequest> lines,
+    AppDbContext db)
+{
+    var errors = new List<string>();
+    var warnings = new List<string>();
+    var details = new List<StockTransferLineCheckDto>();
+    if (lines is null || lines.Count == 0)
+    {
+        errors.Add("At least one line is required.");
+        return new StockTransferValidationResult(false, errors, warnings, details);
+    }
+
+    var src = await db.Warehouses.AsNoTracking().FirstOrDefaultAsync(w => w.WarehouseId == sourceWarehouseId);
+    var dst = await db.Warehouses.AsNoTracking().FirstOrDefaultAsync(w => w.WarehouseId == destinationWarehouseId);
+    if (src is null || dst is null)
+        errors.Add("Unknown warehouse.");
+    else if (src.WarehouseId == dst.WarehouseId)
+        errors.Add("Source and destination must differ.");
+    if (errors.Count > 0)
+        return new StockTransferValidationResult(false, errors, warnings, details);
+
+    var grouped = lines
+        .GroupBy(l => l.ItemId)
+        .Select(g => new { ItemId = g.Key, Quantity = g.Sum(x => x.Quantity) })
+        .ToList();
+
+    foreach (var g in grouped)
+    {
+        if (g.Quantity <= 0)
+        {
+            errors.Add($"Item {g.ItemId}: quantity must be positive.");
+            continue;
+        }
+
+        var item = await db.Items.AsNoTracking().FirstOrDefaultAsync(i => i.ItemId == g.ItemId);
+        if (item is null)
+        {
+            errors.Add($"Unknown item {g.ItemId}.");
+            continue;
+        }
+
+        var sourceAvailable = await db.InventoryRecords.AsNoTracking()
+            .Where(r => r.ItemId == g.ItemId && r.WarehouseId == sourceWarehouseId)
+            .SumAsync(r => r.QuantityOnHand);
+
+        if (sourceAvailable < g.Quantity)
+            errors.Add($"{item.ItemName}: source has {sourceAvailable} on hand, transfer requests {g.Quantity}.");
+
+        var destOnHand = await db.InventoryRecords.AsNoTracking()
+            .Where(r => r.ItemId == g.ItemId && r.WarehouseId == destinationWarehouseId)
+            .SumAsync(r => r.QuantityOnHand);
+
+        var profile = await db.ItemWarehouseProfiles.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.ItemId == g.ItemId && p.WarehouseId == destinationWarehouseId);
+        int? ceiling = profile?.SafetyStockCeiling;
+        var after = destOnHand + g.Quantity;
+        if (ceiling.HasValue && after > ceiling.Value)
+            warnings.Add($"{item.ItemName} at destination: after transfer on-hand would be {after}, above safety ceiling {ceiling.Value} (currently {destOnHand}).");
+
+        details.Add(new StockTransferLineCheckDto(
+            g.ItemId,
+            item.ItemName,
+            g.Quantity,
+            sourceAvailable,
+            destOnHand,
+            ceiling,
+            after));
+    }
+
+    return new StockTransferValidationResult(errors.Count == 0, errors, warnings, details);
+}
+
 internal sealed record ItemCatalogDto(Guid ItemId, string ItemName, string Category, string UnitOfMeasure, string? SpecificationText, int MinimumThreshold);
 
 internal sealed record InventoryRowDto(
@@ -1199,6 +1297,21 @@ internal sealed record CreateStockTransferRequest(
 internal sealed record CompleteStockTransferRequest([Required] Guid CompletedByUserId);
 
 internal sealed record CreateStockTransferLineRequest([Required] Guid ItemId, [Range(1, int.MaxValue)] int Quantity);
+
+internal sealed record StockTransferLineCheckDto(
+    Guid ItemId,
+    string ItemName,
+    int RequestedQuantity,
+    int SourceAvailable,
+    int DestinationOnHand,
+    int? DestinationSafetyCeiling,
+    int DestinationAfterTransfer);
+
+internal sealed record StockTransferValidationResult(
+    bool Valid,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<StockTransferLineCheckDto> LineChecks);
 
 internal sealed record StockTransferLineDto(Guid ItemId, string ItemName, int Quantity);
 
