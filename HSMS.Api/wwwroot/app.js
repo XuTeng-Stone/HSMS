@@ -640,10 +640,10 @@ function renderTransferLines() {
 }
 
 async function loadOrders() {
-  const orders = await apiJson("/api/stock-transfers");
+  const orders = await apiJson("/api/stock-transfers?status=Submitted");
   const box = $("#tr-orders");
   if (!orders.length) {
-    box.innerHTML = '<p class="empty">No transfer orders yet.</p>';
+    box.innerHTML = '<p class="empty">No submitted transfer orders.</p>';
     return;
   }
   box.innerHTML = orders

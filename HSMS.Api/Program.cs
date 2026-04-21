@@ -311,13 +311,17 @@ app.MapPost("/api/stock-transfers/{id:guid}/complete", async (Guid id, [FromBody
     });
 });
 
-app.MapGet("/api/stock-transfers", async (AppDbContext db) =>
+app.MapGet("/api/stock-transfers", async ([FromQuery] string? status, AppDbContext db) =>
 {
-    var orders = await db.StockTransferOrders.AsNoTracking()
+    var ordersQuery = db.StockTransferOrders.AsNoTracking()
         .Include(o => o.SourceWarehouse)
         .Include(o => o.DestinationWarehouse)
         .Include(o => o.Lines)
         .ThenInclude(l => l.Item)
+        .AsQueryable();
+    if (!string.IsNullOrWhiteSpace(status) && Enum.TryParse<StockTransferOrderStatus>(status, true, out var parsedStatus))
+        ordersQuery = ordersQuery.Where(o => o.Status == parsedStatus);
+    var orders = await ordersQuery
         .OrderByDescending(o => o.RequestedAt)
         .ToListAsync();
     var list = orders.Select(o => new StockTransferSummaryDto(
@@ -643,7 +647,7 @@ app.MapPost("/api/requisitions/{id:guid}/pick-and-pack", async (Guid id, [FromBo
     {
         var remaining = line.RequestedQuantity;
         var stockRows = await db.InventoryRecords
-            .Where(r => r.ItemId == line.ItemId && r.QuantityOnHand > 0)
+            .Where(r => r.ItemId == line.ItemId && r.QuantityOnHand > 0 && !r.Warehouse.IsCentralHub)
             .OrderBy(r => r.ExpiryDate)
             .ToListAsync();
         foreach (var stockRow in stockRows)
