@@ -624,6 +624,7 @@ app.MapPost("/api/requisitions/{id:guid}/pick-and-pack", async (Guid id, [FromBo
     await using var tx = await db.Database.BeginTransactionAsync();
     var requisition = await db.Requisitions
         .Include(r => r.RequisitionLineItems)
+        .Include(r => r.PickLists)
         .FirstOrDefaultAsync(r => r.RequisitionId == id);
     if (requisition is null)
         return Results.NotFound();
@@ -634,6 +635,8 @@ app.MapPost("/api/requisitions/{id:guid}/pick-and-pack", async (Guid id, [FromBo
         return Results.BadRequest("Picker user does not exist or is inactive.");
     if (picker.SystemRole is not (SystemRole.InventoryManager or SystemRole.Admin))
         return Results.BadRequest("Only inventory manager or admin can perform pick-and-pack.");
+    if (requisition.PickLists.Any(p => p.PickStatus == PickStatus.Packed))
+        return Results.BadRequest("This requisition has already been picked and packed.");
 
     var shortages = new List<PickShortageDto>();
     foreach (var line in requisition.RequisitionLineItems)

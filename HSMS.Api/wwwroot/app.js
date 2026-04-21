@@ -344,6 +344,7 @@ let transferDraftLines = [];
 let usersCache = [];
 let rqDraftLines = [];
 let selectedRequisitionId = null;
+const requisitionActionLocks = new Set();
 
 const ROLE = {
   admin: "Admin",
@@ -407,8 +408,8 @@ function buildRequesterOptions(users) {
     else if (u.role === ROLE.manager)
       add(u.userId, `${u.fullName} (inventory / central hub)`.trim());
   }
-  add(SEEDED.medical, "Dr. Emily Carter (ER)");
-  add("33333333-3333-3333-3333-333333333302", "Nurse Liam Brooks (OR)");
+  add(SEEDED.medical, "Dr. Emily Carter (Emergency Room)");
+  add("33333333-3333-3333-3333-333333333302", "Nurse Liam Brooks (Operating Room)");
   add(SEEDED.manager, "Ava Thompson (inventory manager)");
   return out;
 }
@@ -884,6 +885,12 @@ async function refreshRequisitionQueue() {
   params.set("queueOrder", queueOrder);
   const list = await apiJson("/api/requisitions?" + params.toString());
   const host = $("#rq-list");
+  const selectedHost = $("#rq-detail");
+  const visibleIds = new Set((list || []).map((r) => String(r.requisitionId)));
+  if (selectedRequisitionId && !visibleIds.has(String(selectedRequisitionId))) {
+    selectedRequisitionId = null;
+    selectedHost.innerHTML = '<p class="empty">Selected requisition is outside the current queue filter.</p>';
+  }
   if (!list.length) {
     host.innerHTML = '<p class="empty">No requisitions found.</p>';
     return;
@@ -982,6 +989,10 @@ async function loadRequisitionDetail(id) {
 
 async function runRequisitionAction(detail, action) {
   const reqId = detail.requisitionId;
+  const lockKey = `${reqId}:${action}`;
+  if (requisitionActionLocks.has(lockKey)) return;
+  requisitionActionLocks.add(lockKey);
+  try {
   if (action === "refresh") {
     await loadRequisitionDetail(reqId);
     return;
@@ -1015,6 +1026,9 @@ async function runRequisitionAction(detail, action) {
   }
   await refreshRequisitionQueue();
   await loadRequisitionDetail(reqId);
+  } finally {
+    requisitionActionLocks.delete(lockKey);
+  }
 }
 
 async function loadRequisitionFeed(reqId, kind) {
